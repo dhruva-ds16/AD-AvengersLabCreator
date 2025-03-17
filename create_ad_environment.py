@@ -88,11 +88,10 @@ class ADEnvironmentCreator:
             return False
 
     def configure_networks(self):
-        """Configure network bridges and VLANs on Proxmox nodes using SSH instead of API."""
+        """Configure network bridges and VLANs on Proxmox nodes using direct pvesh commands."""
         for node_key in ['node1', 'node2']:
             node_config = self.config['proxmox'][node_key]
             node = node_config['node']
-            host = node_config['host']
             
             try:
                 # Configure internal network
@@ -114,18 +113,42 @@ class ADEnvironmentCreator:
                 
                 existing_bridges = [iface.get('iface') for iface in network_info]
                 
-                # If bridges don't exist, create them using SSH
+                # If bridges don't exist, create them using direct pvesh commands
                 if internal_bridge not in existing_bridges:
                     logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
-                    self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {internal_bridge} -type bridge -autostart {internal_autostart} -comments '{internal_name}'")
+                    try:
+                        self._run_local_command(f"pvesh create /nodes/{node}/network -iface {internal_bridge} -type bridge -autostart {internal_autostart} -comments '{internal_name}'")
+                    except Exception as e:
+                        logger.warning(f"pvesh command failed, trying API directly: {e}")
+                        # Fallback to API
+                        proxmox.nodes(node).network.post(
+                            iface=internal_bridge,
+                            type='bridge',
+                            autostart=internal_autostart,
+                            comments=internal_name
+                        )
                 else:
                     logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
                 
                 if external_bridge not in existing_bridges:
                     logger.info(f"Creating external bridge {external_bridge} on {node}...")
-                    self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {external_bridge} -type bridge -autostart {external_autostart} -comments '{external_name}'")
+                    try:
+                        self._run_local_command(f"pvesh create /nodes/{node}/network -iface {external_bridge} -type bridge -autostart {external_autostart} -comments '{external_name}'")
+                    except Exception as e:
+                        logger.warning(f"pvesh command failed, trying API directly: {e}")
+                        # Fallback to API
+                        proxmox.nodes(node).network.post(
+                            iface=external_bridge,
+                            type='bridge',
+                            autostart=external_autostart,
+                            comments=external_name
+                        )
                 else:
                     logger.info(f"External bridge {external_bridge} already exists on {node}")
+                
+                # Refresh network info after creating bridges
+                network_info = proxmox.nodes(node).network.get()
+                existing_bridges = [iface.get('iface') for iface in network_info]
                 
                 # Configure VLANs if specified
                 if 'vlan' in self.config['networks']['internal'] and internal_bridge in existing_bridges:
@@ -134,7 +157,18 @@ class ADEnvironmentCreator:
                     
                     if vlan_iface not in existing_bridges:
                         logger.info(f"Configuring VLAN {vlan_id} on internal network...")
-                        self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {internal_bridge} -vlan_id {vlan_id} -autostart 1")
+                        try:
+                            self._run_local_command(f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {internal_bridge} -vlan_id {vlan_id} -autostart 1")
+                        except Exception as e:
+                            logger.warning(f"pvesh command failed, trying API directly: {e}")
+                            # Fallback to API
+                            proxmox.nodes(node).network.post(
+                                iface=vlan_iface,
+                                type='vlan',
+                                bridge=internal_bridge,
+                                vlan_id=vlan_id,
+                                autostart=1
+                            )
                 
                 if 'vlan' in self.config['networks']['external'] and external_bridge in existing_bridges:
                     vlan_id = self.config['networks']['external']['vlan']
@@ -142,11 +176,27 @@ class ADEnvironmentCreator:
                     
                     if vlan_iface not in existing_bridges:
                         logger.info(f"Configuring VLAN {vlan_id} on external network...")
-                        self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {external_bridge} -vlan_id {vlan_id} -autostart 1")
+                        try:
+                            self._run_local_command(f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {external_bridge} -vlan_id {vlan_id} -autostart 1")
+                        except Exception as e:
+                            logger.warning(f"pvesh command failed, trying API directly: {e}")
+                            # Fallback to API
+                            proxmox.nodes(node).network.post(
+                                iface=vlan_iface,
+                                type='vlan',
+                                bridge=external_bridge,
+                                vlan_id=vlan_id,
+                                autostart=1
+                            )
                 
                 # Apply network configuration
                 logger.info(f"Applying network configuration on {node}...")
-                self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -reload 1")
+                try:
+                    self._run_local_command(f"pvesh create /nodes/{node}/network -reload 1")
+                except Exception as e:
+                    logger.warning(f"pvesh command failed, trying API directly: {e}")
+                    # Fallback to API
+                    proxmox.nodes(node).network.put('reload')
                 
                 logger.info(f"Network configuration completed on {node}")
             except Exception as e:
@@ -154,14 +204,15 @@ class ADEnvironmentCreator:
                 return False
         return True
     
-    def _run_ssh_command(self, host, command):
-        """Run a command via SSH on the Proxmox host."""
-        ssh_command = f"ssh root@{host} '{command}'"
+    def _run_local_command(self, command):
+        """Run a command locally on the Proxmox node."""
         try:
-            result = subprocess.run(ssh_command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logger.info(f"Running local command: {command}")
+            result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             return result.stdout.decode('utf-8')
         except subprocess.CalledProcessError as e:
-            logger.error(f"SSH command failed: {e.stderr.decode('utf-8')}")
+            error_output = e.stderr.decode('utf-8')
+            logger.error(f"Command failed with exit code {e.returncode}: {error_output}")
             raise
 
     def create_vm(self, vm_config, vm_type):
