@@ -501,15 +501,11 @@ iface {external_bridge} inet manual
                 'sockets': 1,
                 'ostype': "win11",
                 'scsihw': "virtio-scsi-pci",
+                'scsi0': f"{storage}:{disk_size}",
                 'ide2': f"{iso_path},media=cdrom",
                 'ide3': f"{virtio_path},media=cdrom",
                 **net_config
             }
-            
-            # Add disk configuration separately
-            # For Proxmox API, use the 'disk' parameter with the storage name and size
-            create_params['storage'] = storage
-            create_params['disk'] = disk_size
             
             # Convert any boolean values to integers (1/0)
             for key, value in create_params.items():
