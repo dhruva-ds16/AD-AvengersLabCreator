@@ -88,68 +88,81 @@ class ADEnvironmentCreator:
             return False
 
     def configure_networks(self):
-        """Configure network bridges and VLANs on Proxmox nodes."""
-        # Skip default network detection as requested
-        # if self.config['networks']['external'].get('use_default', False):
-        #     for node_key in ['node1', 'node2']:
-        #         self._detect_default_network(node_key)
-        
+        """Configure network bridges and VLANs on Proxmox nodes using SSH instead of API."""
         for node_key in ['node1', 'node2']:
-            node = self.config['proxmox'][node_key]['node']
-            proxmox = self.proxmox_connections[node]
+            node_config = self.config['proxmox'][node_key]
+            node = node_config['node']
+            host = node_config['host']
             
             try:
                 # Configure internal network
-                internal_bridge = self.config['proxmox'][node_key]['network']['internal_bridge']
-                proxmox.nodes(node).network.create(
-                    iface=internal_bridge,
-                    type='bridge',
-                    autostart=self.config['networks']['internal'].get('autostart', True),
-                    comments=self.config['networks']['internal'].get('name', 'Internal Network Bridge')
-                )
-                logger.info(f"Configured internal network bridge {internal_bridge} on {node}")
-
+                internal_bridge = node_config['network']['internal_bridge']
+                internal_name = self.config['networks']['internal']['name']
+                internal_autostart = 1 if self.config['networks']['internal'].get('autostart', True) else 0
+                
                 # Configure external network
-                external_bridge = self.config['proxmox'][node_key]['network']['external_bridge']
-                proxmox.nodes(node).network.create(
-                    iface=external_bridge,
-                    type='bridge',
-                    autostart=self.config['networks']['external'].get('autostart', True),
-                    comments=self.config['networks']['external'].get('name', 'External Network Bridge')
-                )
-                logger.info(f"Configured external network bridge {external_bridge} on {node}")
-
+                external_bridge = node_config['network']['external_bridge']
+                external_name = self.config['networks']['external']['name']
+                external_autostart = 1 if self.config['networks']['external'].get('autostart', True) else 0
+                
+                # Check if bridges already exist
+                logger.info(f"Checking if bridges already exist on {node}...")
+                
+                # Use the ProxmoxAPI to check if the bridges exist
+                proxmox = self.proxmox_connections[node]
+                network_info = proxmox.nodes(node).network.get()
+                
+                existing_bridges = [iface.get('iface') for iface in network_info]
+                
+                # If bridges don't exist, create them using SSH
+                if internal_bridge not in existing_bridges:
+                    logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
+                    self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {internal_bridge} -type bridge -autostart {internal_autostart} -comments '{internal_name}'")
+                else:
+                    logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
+                
+                if external_bridge not in existing_bridges:
+                    logger.info(f"Creating external bridge {external_bridge} on {node}...")
+                    self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {external_bridge} -type bridge -autostart {external_autostart} -comments '{external_name}'")
+                else:
+                    logger.info(f"External bridge {external_bridge} already exists on {node}")
+                
                 # Configure VLANs if specified
-                if 'vlan' in self.config['networks']['internal']:
+                if 'vlan' in self.config['networks']['internal'] and internal_bridge in existing_bridges:
                     vlan_id = self.config['networks']['internal']['vlan']
-                    proxmox.nodes(node).network.create(
-                        iface=f"vlan{vlan_id}",
-                        type='vlan',
-                        bridge=internal_bridge,
-                        vlanid=vlan_id,
-                        autostart=True
-                    )
-                    logger.info(f"Configured VLAN {vlan_id} on internal network")
-
-                if 'vlan' in self.config['networks']['external']:
+                    vlan_iface = f"vlan{vlan_id}"
+                    
+                    if vlan_iface not in existing_bridges:
+                        logger.info(f"Configuring VLAN {vlan_id} on internal network...")
+                        self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {internal_bridge} -vlan_id {vlan_id} -autostart 1")
+                
+                if 'vlan' in self.config['networks']['external'] and external_bridge in existing_bridges:
                     vlan_id = self.config['networks']['external']['vlan']
-                    proxmox.nodes(node).network.create(
-                        iface=f"vlan{vlan_id}",
-                        type='vlan',
-                        bridge=external_bridge,
-                        vlanid=vlan_id,
-                        autostart=True
-                    )
-                    logger.info(f"Configured VLAN {vlan_id} on external network")
-
+                    vlan_iface = f"vlan{vlan_id}"
+                    
+                    if vlan_iface not in existing_bridges:
+                        logger.info(f"Configuring VLAN {vlan_id} on external network...")
+                        self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {external_bridge} -vlan_id {vlan_id} -autostart 1")
+                
                 # Apply network configuration
-                proxmox.nodes(node).network.reload()
-                logger.info(f"Applied network configuration on {node}")
-
+                logger.info(f"Applying network configuration on {node}...")
+                self._run_ssh_command(host, f"pvesh create /nodes/{node}/network -reload 1")
+                
+                logger.info(f"Network configuration completed on {node}")
             except Exception as e:
                 logger.error(f"Failed to configure networks on {node}: {e}")
                 return False
         return True
+    
+    def _run_ssh_command(self, host, command):
+        """Run a command via SSH on the Proxmox host."""
+        ssh_command = f"ssh root@{host} '{command}'"
+        try:
+            result = subprocess.run(ssh_command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return result.stdout.decode('utf-8')
+        except subprocess.CalledProcessError as e:
+            logger.error(f"SSH command failed: {e.stderr.decode('utf-8')}")
+            raise
 
     def create_vm(self, vm_config, vm_type):
         """Create a new VM with specified configuration."""
@@ -175,6 +188,7 @@ class ADEnvironmentCreator:
 
         # Create VM
         try:
+            # Convert any boolean parameters to integers for Proxmox API
             create_params = {
                 'vmid': vmid,
                 'name': vm_config['name'],
@@ -188,6 +202,11 @@ class ADEnvironmentCreator:
                 'ide3': f"{self.config['windows']['iso_storage']:iso}/{self.config['windows']['virtio_iso']},media=cdrom",
                 **net_config
             }
+            
+            # Convert any boolean values to integers (1/0)
+            for key, value in create_params.items():
+                if isinstance(value, bool):
+                    create_params[key] = 1 if value else 0
             
             proxmox.nodes(node).qemu.create(**create_params)
             logger.info(f"Created VM {vm_config['name']} with ID {vmid} on node {node}")

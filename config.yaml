@@ -18,7 +18,7 @@ proxmox:
       external_interface: "eth0"  # Physical interface for external network
   user: "root@pam"
   token_name: "adtoken-lab"
-  token_value: ""  # Add your API token here
+  token_value: ""  # Add your API token here - MUST have Sys.Modify privilege
   verify_ssl: false
 
 # Network Configuration
