@@ -7,6 +7,7 @@ import yaml
 import logging
 import subprocess
 import re
+import socket
 from proxmoxer import ProxmoxAPI
 from pathlib import Path
 
@@ -38,13 +39,42 @@ class ADEnvironmentCreator:
         for node_key in ['node1', 'node2']:
             node_config = self.config['proxmox'][node_key]
             try:
-                proxmox = ProxmoxAPI(
-                    node_config['host'],
-                    user=self.config['proxmox']['user'],
-                    token_name=self.config['proxmox']['token_name'],
-                    token_value=self.config['proxmox']['token_value'],
-                    verify_ssl=self.config['proxmox'].get('verify_ssl', False)
-                )
+                # Determine if we're running on this Proxmox node
+                hostname = socket.gethostname()
+                is_local_node = (hostname == node_config['node'])
+                logger.info(f"Current hostname: {hostname}, Node: {node_config['node']}, Is local: {is_local_node}")
+                
+                # If we're on the local node and no token is provided, use ticket auth
+                if is_local_node and not self.config['proxmox']['token_value']:
+                    logger.info(f"Using ticket-based authentication for local node {node_config['node']}")
+                    # Try to use pvesh to get a ticket
+                    try:
+                        # Get username and password from environment or config
+                        username = os.environ.get('PROXMOX_USER', self.config['proxmox']['user'])
+                        password = os.environ.get('PROXMOX_PASSWORD', '')
+                        
+                        if not password:
+                            logger.warning("No password provided for ticket auth. Will try to use existing ticket or cookie.")
+                        
+                        proxmox = ProxmoxAPI(
+                            node_config['host'],
+                            user=username,
+                            password=password,
+                            verify_ssl=self.config['proxmox'].get('verify_ssl', False)
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to authenticate with ticket: {e}")
+                        raise
+                else:
+                    # Use token-based authentication
+                    proxmox = ProxmoxAPI(
+                        node_config['host'],
+                        user=self.config['proxmox']['user'],
+                        token_name=self.config['proxmox']['token_name'],
+                        token_value=self.config['proxmox']['token_value'],
+                        verify_ssl=self.config['proxmox'].get('verify_ssl', False)
+                    )
+                
                 self.proxmox_connections[node_config['node']] = proxmox
                 logger.info(f"Connected to Proxmox node: {node_config['node']}")
             except Exception as e:
@@ -88,122 +118,144 @@ class ADEnvironmentCreator:
             return False
 
     def configure_networks(self):
-        """Configure network bridges and VLANs on Proxmox nodes using direct pvesh commands."""
+        """Configure network bridges and VLANs on Proxmox nodes."""
         for node_key in ['node1', 'node2']:
             node_config = self.config['proxmox'][node_key]
             node = node_config['node']
             
-            try:
-                # Configure internal network
-                internal_bridge = node_config['network']['internal_bridge']
-                internal_name = self.config['networks']['internal']['name']
-                internal_autostart = 1 if self.config['networks']['internal'].get('autostart', True) else 0
-                
-                # Configure external network
-                external_bridge = node_config['network']['external_bridge']
-                external_name = self.config['networks']['external']['name']
-                external_autostart = 1 if self.config['networks']['external'].get('autostart', True) else 0
-                
-                # Check if bridges already exist
-                logger.info(f"Checking if bridges already exist on {node}...")
-                
-                # Use the ProxmoxAPI to check if the bridges exist
-                proxmox = self.proxmox_connections[node]
-                network_info = proxmox.nodes(node).network.get()
-                
-                existing_bridges = [iface.get('iface') for iface in network_info]
-                
-                # If bridges don't exist, create them using direct pvesh commands
-                if internal_bridge not in existing_bridges:
-                    logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
-                    try:
-                        self._run_local_command(f"pvesh create /nodes/{node}/network -iface {internal_bridge} -type bridge -autostart {internal_autostart} -comments '{internal_name}'")
-                    except Exception as e:
-                        logger.warning(f"pvesh command failed, trying API directly: {e}")
-                        # Fallback to API
-                        proxmox.nodes(node).network.post(
-                            iface=internal_bridge,
-                            type='bridge',
-                            autostart=internal_autostart,
-                            comments=internal_name
-                        )
-                else:
-                    logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
-                
-                if external_bridge not in existing_bridges:
-                    logger.info(f"Creating external bridge {external_bridge} on {node}...")
-                    try:
-                        self._run_local_command(f"pvesh create /nodes/{node}/network -iface {external_bridge} -type bridge -autostart {external_autostart} -comments '{external_name}'")
-                    except Exception as e:
-                        logger.warning(f"pvesh command failed, trying API directly: {e}")
-                        # Fallback to API
-                        proxmox.nodes(node).network.post(
-                            iface=external_bridge,
-                            type='bridge',
-                            autostart=external_autostart,
-                            comments=external_name
-                        )
-                else:
-                    logger.info(f"External bridge {external_bridge} already exists on {node}")
-                
-                # Refresh network info after creating bridges
-                network_info = proxmox.nodes(node).network.get()
-                existing_bridges = [iface.get('iface') for iface in network_info]
-                
-                # Configure VLANs if specified
-                if 'vlan' in self.config['networks']['internal'] and internal_bridge in existing_bridges:
-                    vlan_id = self.config['networks']['internal']['vlan']
-                    vlan_iface = f"vlan{vlan_id}"
-                    
-                    if vlan_iface not in existing_bridges:
-                        logger.info(f"Configuring VLAN {vlan_id} on internal network...")
-                        try:
-                            self._run_local_command(f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {internal_bridge} -vlan_id {vlan_id} -autostart 1")
-                        except Exception as e:
-                            logger.warning(f"pvesh command failed, trying API directly: {e}")
-                            # Fallback to API
-                            proxmox.nodes(node).network.post(
-                                iface=vlan_iface,
-                                type='vlan',
-                                bridge=internal_bridge,
-                                vlan_id=vlan_id,
-                                autostart=1
-                            )
-                
-                if 'vlan' in self.config['networks']['external'] and external_bridge in existing_bridges:
-                    vlan_id = self.config['networks']['external']['vlan']
-                    vlan_iface = f"vlan{vlan_id}"
-                    
-                    if vlan_iface not in existing_bridges:
-                        logger.info(f"Configuring VLAN {vlan_id} on external network...")
-                        try:
-                            self._run_local_command(f"pvesh create /nodes/{node}/network -iface {vlan_iface} -type vlan -bridge {external_bridge} -vlan_id {vlan_id} -autostart 1")
-                        except Exception as e:
-                            logger.warning(f"pvesh command failed, trying API directly: {e}")
-                            # Fallback to API
-                            proxmox.nodes(node).network.post(
-                                iface=vlan_iface,
-                                type='vlan',
-                                bridge=external_bridge,
-                                vlan_id=vlan_id,
-                                autostart=1
-                            )
-                
-                # Apply network configuration
-                logger.info(f"Applying network configuration on {node}...")
-                try:
-                    self._run_local_command(f"pvesh create /nodes/{node}/network -reload 1")
-                except Exception as e:
-                    logger.warning(f"pvesh command failed, trying API directly: {e}")
-                    # Fallback to API
-                    proxmox.nodes(node).network.put('reload')
-                
-                logger.info(f"Network configuration completed on {node}")
-            except Exception as e:
-                logger.error(f"Failed to configure networks on {node}: {e}")
-                return False
+            # Determine if we're running on this Proxmox node
+            hostname = socket.gethostname()
+            is_local_node = (hostname == node)
+            
+            if is_local_node:
+                # If we're on the local node, use direct CLI commands
+                logger.info(f"Configuring networks on local node {node} using direct CLI commands")
+                if not self._configure_networks_cli(node_key):
+                    return False
+            else:
+                # If we're not on the local node, use the API
+                logger.info(f"Configuring networks on remote node {node} using API")
+                if not self._configure_networks_api(node_key):
+                    return False
+        
         return True
     
+    def _configure_networks_cli(self, node_key):
+        """Configure networks using direct pvesh CLI commands without VLANs."""
+        node_config = self.config['proxmox'][node_key]
+        node = node_config['node']
+        
+        try:
+            # Configure internal network
+            internal_bridge = node_config['network']['internal_bridge']
+            internal_name = self.config['networks']['internal']['name']
+            internal_autostart = 1 if self.config['networks']['internal'].get('autostart', True) else 0
+            
+            # Configure external network
+            external_bridge = node_config['network']['external_bridge']
+            external_name = self.config['networks']['external']['name']
+            external_autostart = 1 if self.config['networks']['external'].get('autostart', True) else 0
+            
+            # Check if bridges already exist using pvesh
+            logger.info(f"Checking if bridges already exist on {node}...")
+            network_info_str = self._run_local_command(f"pvesh get /nodes/{node}/network")
+            
+            # Parse the network info to find existing bridges
+            existing_bridges = []
+            for line in network_info_str.splitlines():
+                if 'iface:' in line:
+                    iface_name = line.split('iface:')[1].strip()
+                    existing_bridges.append(iface_name)
+            
+            logger.info(f"Existing bridges: {existing_bridges}")
+            
+            # If bridges don't exist, create them using pvesh
+            if internal_bridge not in existing_bridges:
+                logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
+                self._run_local_command(f"pvesh create /nodes/{node}/network --iface {internal_bridge} --type bridge --autostart {internal_autostart} --comments '{internal_name}'")
+            else:
+                logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
+            
+            if external_bridge not in existing_bridges:
+                logger.info(f"Creating external bridge {external_bridge} on {node}...")
+                self._run_local_command(f"pvesh create /nodes/{node}/network --iface {external_bridge} --type bridge --autostart {external_autostart} --comments '{external_name}'")
+            else:
+                logger.info(f"External bridge {external_bridge} already exists on {node}")
+            
+            # Skip VLAN configuration as requested
+            logger.info("Skipping VLAN configuration as requested")
+            
+            # Apply network configuration using pvesh
+            logger.info(f"Applying network configuration on {node}...")
+            self._run_local_command(f"pvesh create /nodes/{node}/network --reload 1")
+            
+            logger.info(f"Network configuration completed on {node}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to configure networks on {node} using pvesh CLI: {e}")
+            return False
+    
+    def _configure_networks_api(self, node_key):
+        """Configure network bridges on Proxmox nodes using API (without VLANs)."""
+        node_config = self.config['proxmox'][node_key]
+        node = node_config['node']
+        
+        try:
+            # Configure internal network
+            internal_bridge = node_config['network']['internal_bridge']
+            internal_name = self.config['networks']['internal']['name']
+            internal_autostart = 1 if self.config['networks']['internal'].get('autostart', True) else 0
+            
+            # Configure external network
+            external_bridge = node_config['network']['external_bridge']
+            external_name = self.config['networks']['external']['name']
+            external_autostart = 1 if self.config['networks']['external'].get('autostart', True) else 0
+            
+            # Check if bridges already exist
+            logger.info(f"Checking if bridges already exist on {node}...")
+            
+            # Use the ProxmoxAPI to check if the bridges exist
+            proxmox = self.proxmox_connections[node]
+            network_info = proxmox.nodes(node).network.get()
+            
+            existing_bridges = [iface.get('iface') for iface in network_info]
+            
+            # If bridges don't exist, create them using API
+            if internal_bridge not in existing_bridges:
+                logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
+                proxmox.nodes(node).network.post(
+                    iface=internal_bridge,
+                    type='bridge',
+                    autostart=internal_autostart,
+                    comments=internal_name
+                )
+            else:
+                logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
+            
+            if external_bridge not in existing_bridges:
+                logger.info(f"Creating external bridge {external_bridge} on {node}...")
+                proxmox.nodes(node).network.post(
+                    iface=external_bridge,
+                    type='bridge',
+                    autostart=external_autostart,
+                    comments=external_name
+                )
+            else:
+                logger.info(f"External bridge {external_bridge} already exists on {node}")
+            
+            # Skip VLAN configuration as requested
+            logger.info("Skipping VLAN configuration as requested")
+            
+            # Apply network configuration
+            logger.info(f"Applying network configuration on {node}...")
+            proxmox.nodes(node).network.put('reload')
+            
+            logger.info(f"Network configuration completed on {node}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to configure networks on {node} using API: {e}")
+            return False
+
     def _run_local_command(self, command):
         """Run a command locally on the Proxmox node."""
         try:
@@ -232,10 +284,9 @@ class ADEnvironmentCreator:
             else:
                 bridge = self.config['proxmox'][self._get_node_key(node)]['network']['external_bridge']
             
-            # Add VLAN tag if specified
-            vlan_tag = f",tag={net.get('vlan', '')}" if 'vlan' in net else ""
-            
-            net_config[f'net{idx}'] = f"model=virtio,bridge={bridge}{vlan_tag}"
+            # Skip VLAN tags as requested
+            net_config[f'net{idx}'] = f"model=virtio,bridge={bridge}"
+            logger.info(f"Configured network {idx} with bridge {bridge} (no VLAN)")
 
         # Create VM
         try:
