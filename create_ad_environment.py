@@ -391,10 +391,72 @@ iface {external_bridge} inet manual
             logger.error(f"Command failed with exit code {e.returncode}: {error_output}")
             raise
 
+    def _verify_iso_files(self, node):
+        """Verify that the required ISO files exist on the specified node."""
+        try:
+            proxmox = self.proxmox_connections[node]
+            iso_storage = self.config['windows']['iso_storage']
+            iso_file = self.config['windows']['iso_file']
+            virtio_iso = self.config['windows']['virtio_iso']
+            
+            # Format the ISO paths
+            iso_path = self._format_iso_path(iso_storage, iso_file)
+            virtio_path = self._format_iso_path(iso_storage, virtio_iso)
+            
+            logger.info(f"Checking for Windows ISO: {iso_path}")
+            logger.info(f"Checking for VirtIO ISO: {virtio_path}")
+            
+            # Get the list of ISOs in the storage
+            try:
+                # Extract the storage name without the path
+                storage_name = iso_storage.split(':')[0] if ':' in iso_storage else iso_storage
+                
+                # Get the content list from the storage
+                iso_list = proxmox.nodes(node).storage(storage_name).content.get()
+                
+                # Extract the volume IDs
+                iso_volids = [iso.get('volid', '') for iso in iso_list]
+                
+                logger.info(f"Available ISOs on {node}: {iso_volids}")
+                
+                # Check if the required ISOs exist
+                windows_iso_exists = any(iso_file in volid for volid in iso_volids)
+                virtio_iso_exists = any(virtio_iso in volid for volid in iso_volids)
+                
+                if not windows_iso_exists:
+                    logger.warning(f"Windows ISO '{iso_file}' not found on {node}")
+                
+                if not virtio_iso_exists:
+                    logger.warning(f"VirtIO ISO '{virtio_iso}' not found on {node}")
+                
+                return windows_iso_exists and virtio_iso_exists
+            except Exception as e:
+                logger.warning(f"Failed to list ISOs on {node}: {e}")
+                # If we can't list ISOs, assume they exist and let the VM creation fail if they don't
+                return True
+        except Exception as e:
+            logger.error(f"Failed to verify ISO files on {node}: {e}")
+            return False
+
+    def _format_iso_path(self, storage, filename):
+        """Format an ISO path correctly for Proxmox."""
+        # Check if the storage name already contains a colon
+        if ':' in storage:
+            storage_prefix = storage
+        else:
+            storage_prefix = f"{storage}:iso"
+        
+        # Return the formatted path
+        return f"{storage_prefix}/{filename}"
+
     def create_vm(self, vm_config, vm_type):
         """Create a new VM with specified configuration."""
         node = vm_config['node']
         proxmox = self.proxmox_connections[node]
+        
+        # Verify that the ISO files exist
+        if not self._verify_iso_files(node):
+            logger.warning(f"Required ISO files may be missing on {node}. VM creation may fail.")
         
         # Get next available VM ID
         vmid = self._get_next_vmid(proxmox)
@@ -414,6 +476,18 @@ iface {external_bridge} inet manual
 
         # Create VM
         try:
+            # Format ISO paths correctly
+            iso_storage = self.config['windows']['iso_storage']
+            iso_file = self.config['windows']['iso_file']
+            virtio_iso = self.config['windows']['virtio_iso']
+            
+            # Use the helper method to format ISO paths
+            iso_path = self._format_iso_path(iso_storage, iso_file)
+            virtio_path = self._format_iso_path(iso_storage, virtio_iso)
+            
+            logger.info(f"Using Windows ISO: {iso_path}")
+            logger.info(f"Using VirtIO ISO: {virtio_path}")
+            
             # Convert any boolean parameters to integers for Proxmox API
             create_params = {
                 'vmid': vmid,
@@ -424,8 +498,8 @@ iface {external_bridge} inet manual
                 'ostype': "win11",
                 'scsihw': "virtio-scsi-pci",
                 'scsi0': f"{vm_config['storage']}:{vm_config['disk_size']}",
-                'ide2': f"{self.config['windows']['iso_storage']:iso}/{self.config['windows']['iso_file']},media=cdrom",
-                'ide3': f"{self.config['windows']['iso_storage']:iso}/{self.config['windows']['virtio_iso']},media=cdrom",
+                'ide2': f"{iso_path},media=cdrom",
+                'ide3': f"{virtio_path},media=cdrom",
                 **net_config
             }
             
@@ -434,11 +508,15 @@ iface {external_bridge} inet manual
                 if isinstance(value, bool):
                     create_params[key] = 1 if value else 0
             
+            # Log the complete VM creation parameters for debugging
+            logger.info(f"VM creation parameters: {create_params}")
+            
             proxmox.nodes(node).qemu.create(**create_params)
             logger.info(f"Created VM {vm_config['name']} with ID {vmid} on node {node}")
             return vmid
         except Exception as e:
             logger.error(f"Failed to create VM: {e}")
+            logger.error(f"Error details: {str(e)}")
             return None
 
     def _get_node_key(self, node_name):

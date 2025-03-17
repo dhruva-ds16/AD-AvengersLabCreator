@@ -101,9 +101,9 @@ vm_distribution:
 
 # Windows ISO and Template Configuration
 windows:
-  iso_storage: "local"
-  iso_file: "Windows_Server_2022_EVAL.iso"
-  virtio_iso: "virtio-win.iso"
+  iso_storage: "local"  # Storage location for ISOs (usually 'local')
+  iso_file: "Windows_Server_2022_EVAL.iso"  # Windows Server ISO filename
+  virtio_iso: "virtio-win.iso"  # VirtIO drivers ISO filename
 
 # User Configuration
 users:
