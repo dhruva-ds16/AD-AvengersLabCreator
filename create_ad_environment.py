@@ -492,7 +492,7 @@ iface {external_bridge} inet manual
             storage = vm_config['storage']
             disk_size = vm_config['disk_size']
             
-            # Convert any boolean parameters to integers for Proxmox API
+            # Step 1: Create VM without disk
             create_params = {
                 'vmid': vmid,
                 'name': vm_config['name'],
@@ -501,7 +501,6 @@ iface {external_bridge} inet manual
                 'sockets': 1,
                 'ostype': "win11",
                 'scsihw': "virtio-scsi-pci",
-                'scsi0': f"{storage}:{disk_size}",
                 'ide2': f"{iso_path},media=cdrom",
                 'ide3': f"{virtio_path},media=cdrom",
                 **net_config
@@ -515,8 +514,40 @@ iface {external_bridge} inet manual
             # Log the complete VM creation parameters for debugging
             logger.info(f"VM creation parameters: {create_params}")
             
+            # Create the VM without disk first
             proxmox.nodes(node).qemu.create(**create_params)
             logger.info(f"Created VM {vm_config['name']} with ID {vmid} on node {node}")
+            
+            # Step 2: Add disk using pvesh command instead of the API
+            # This ensures we're using the exact format that Proxmox expects
+            try:
+                # Clean the disk size format
+                if disk_size.endswith('G') or disk_size.endswith('g'):
+                    clean_size = disk_size
+                else:
+                    clean_size = f"{disk_size}G"  # Default to GB if no unit specified
+                
+                # Use subprocess to run pvesh command to add disk
+                disk_command = f"pvesh create /nodes/{node}/qemu/{vmid}/config -scsi0 {storage}:{clean_size}"
+                logger.info(f"Adding disk with command: {disk_command}")
+                
+                # Run the command if we're on the local node
+                hostname = socket.gethostname()
+                is_local_node = (hostname == node)
+                
+                if is_local_node:
+                    self._run_local_command(disk_command)
+                    logger.info(f"Added disk to VM {vm_config['name']} using local command")
+                else:
+                    # If not on local node, use API to add disk
+                    logger.info(f"Not on local node, using API to add disk")
+                    proxmox.nodes(node).qemu(vmid).config.put(scsi0=f"{storage}:{clean_size}")
+                    logger.info(f"Added disk to VM {vm_config['name']} using API")
+                
+            except Exception as disk_error:
+                logger.error(f"Failed to add disk to VM: {disk_error}")
+                # Continue even if disk creation fails, as we can add it manually later
+            
             return vmid
         except Exception as e:
             logger.error(f"Failed to create VM: {e}")
