@@ -118,7 +118,7 @@ class ADEnvironmentCreator:
             return False
 
     def configure_networks(self):
-        """Configure network bridges and VLANs on Proxmox nodes."""
+        """Configure network bridges on Proxmox nodes."""
         for node_key in ['node1', 'node2']:
             node_config = self.config['proxmox'][node_key]
             node = node_config['node']
@@ -128,10 +128,19 @@ class ADEnvironmentCreator:
             is_local_node = (hostname == node)
             
             if is_local_node:
-                # If we're on the local node, use direct CLI commands
-                logger.info(f"Configuring networks on local node {node} using direct CLI commands")
-                if not self._configure_networks_cli(node_key):
-                    return False
+                # If we're on the local node, try direct file editing first
+                logger.info(f"Configuring networks on local node {node} using direct file editing")
+                if self._configure_networks_cli(node_key):
+                    continue
+                
+                # If direct file editing fails, try using iproute2 commands as fallback
+                logger.warning(f"Direct file editing failed, trying iproute2 commands as fallback")
+                if self._configure_networks_fallback(node_key):
+                    continue
+                
+                # If both methods fail, return failure
+                logger.error(f"All network configuration methods failed for {node}")
+                return False
             else:
                 # If we're not on the local node, use the API
                 logger.info(f"Configuring networks on remote node {node} using API")
@@ -141,7 +150,7 @@ class ADEnvironmentCreator:
         return True
     
     def _configure_networks_cli(self, node_key):
-        """Configure networks using direct pvesh CLI commands without VLANs."""
+        """Configure networks using direct file editing instead of pvesh commands."""
         node_config = self.config['proxmox'][node_key]
         node = node_config['node']
         
@@ -156,53 +165,72 @@ class ADEnvironmentCreator:
             external_name = self.config['networks']['external']['name']
             external_autostart = 1 if self.config['networks']['external'].get('autostart', True) else 0
             
-            # Check if bridges already exist using pvesh
+            # Check if bridges already exist using ip command
             logger.info(f"Checking if bridges already exist on {node}...")
-            try:
-                network_info_str = self._run_local_command(f"pvesh get /nodes/{node}/network")
-                
-                # Parse the network info to find existing bridges
-                existing_bridges = []
-                for line in network_info_str.splitlines():
-                    if 'iface:' in line:
-                        iface_name = line.split('iface:')[1].strip()
-                        existing_bridges.append(iface_name)
-                
-                logger.info(f"Existing bridges detected via pvesh: {existing_bridges}")
-            except Exception as e:
-                logger.warning(f"Failed to get network info via pvesh: {e}")
-                # Fallback to ip command
-                ip_output = self._run_local_command("ip link show")
-                existing_bridges = []
-                for line in ip_output.splitlines():
-                    if ': ' in line and 'bridge' in line:
-                        iface_name = line.split(': ')[1].split(':')[0].strip()
-                        existing_bridges.append(iface_name)
-                logger.info(f"Existing bridges detected via ip command: {existing_bridges}")
+            ip_output = self._run_local_command("ip link show")
+            existing_bridges = []
+            for line in ip_output.splitlines():
+                if ': ' in line:
+                    iface_name = line.split(': ')[1].split(':')[0].strip()
+                    existing_bridges.append(iface_name)
             
-            # If bridges don't exist, create them using pvesh
-            if internal_bridge in existing_bridges:
-                logger.info(f"Internal bridge {internal_bridge} already exists on {node}, skipping creation")
-            else:
+            logger.info(f"Existing bridges detected: {existing_bridges}")
+            
+            # Check if the bridge is already defined in /etc/network/interfaces
+            interfaces_content = self._run_local_command("cat /etc/network/interfaces")
+            
+            # If internal bridge doesn't exist, create it by editing /etc/network/interfaces
+            if internal_bridge not in existing_bridges and f"iface {internal_bridge}" not in interfaces_content:
                 logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
-                self._run_local_command(f"pvesh create /nodes/{node}/network --iface {internal_bridge} --type bridge --autostart {internal_autostart} --comments '{internal_name}'")
-            
-            if external_bridge in existing_bridges:
-                logger.info(f"External bridge {external_bridge} already exists on {node}, skipping creation")
-                # If internal and external bridges are the same (both vmbr0), log a warning
-                if internal_bridge == external_bridge:
-                    logger.warning(f"Internal and external bridges are both set to {internal_bridge}. This is not recommended for production.")
+                
+                # Create a temporary file with the bridge configuration
+                bridge_config = f"""
+# {internal_name}
+auto {internal_bridge}
+iface {internal_bridge} inet manual
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+"""
+                # Append the configuration to /etc/network/interfaces
+                self._run_local_command(f"echo '{bridge_config}' >> /etc/network/interfaces")
+                logger.info(f"Added {internal_bridge} configuration to /etc/network/interfaces")
             else:
+                logger.info(f"Internal bridge {internal_bridge} already exists or is configured")
+            
+            # If external bridge doesn't exist and is not vmbr0 (which already exists), create it
+            if external_bridge != "vmbr0" and external_bridge not in existing_bridges and f"iface {external_bridge}" not in interfaces_content:
                 logger.info(f"Creating external bridge {external_bridge} on {node}...")
-                self._run_local_command(f"pvesh create /nodes/{node}/network --iface {external_bridge} --type bridge --autostart {external_autostart} --comments '{external_name}'")
+                
+                # Create a temporary file with the bridge configuration
+                bridge_config = f"""
+# {external_name}
+auto {external_bridge}
+iface {external_bridge} inet manual
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+"""
+                # Append the configuration to /etc/network/interfaces
+                self._run_local_command(f"echo '{bridge_config}' >> /etc/network/interfaces")
+                logger.info(f"Added {external_bridge} configuration to /etc/network/interfaces")
+            else:
+                logger.info(f"External bridge {external_bridge} already exists or is configured")
             
             # Skip VLAN configuration as requested
             logger.info("Skipping VLAN configuration as requested")
             
-            # Apply network configuration using pvesh only if we created new bridges
-            if internal_bridge not in existing_bridges or external_bridge not in existing_bridges:
+            # Apply network configuration by bringing up the interfaces
+            if internal_bridge not in existing_bridges or (external_bridge != "vmbr0" and external_bridge not in existing_bridges):
                 logger.info(f"Applying network configuration on {node}...")
-                self._run_local_command(f"pvesh create /nodes/{node}/network --reload 1")
+                
+                # Bring up the bridges
+                if internal_bridge not in existing_bridges:
+                    self._run_local_command(f"ifup {internal_bridge}")
+                
+                if external_bridge != "vmbr0" and external_bridge not in existing_bridges:
+                    self._run_local_command(f"ifup {external_bridge}")
+                
                 logger.info(f"Network configuration applied on {node}")
             else:
                 logger.info(f"No new bridges created, skipping network reload")
@@ -210,7 +238,7 @@ class ADEnvironmentCreator:
             logger.info(f"Network configuration completed on {node}")
             return True
         except Exception as e:
-            logger.error(f"Failed to configure networks on {node} using pvesh CLI: {e}")
+            logger.error(f"Failed to configure networks on {node} using direct file editing: {e}")
             return False
     
     def _configure_networks_api(self, node_key):
@@ -234,44 +262,122 @@ class ADEnvironmentCreator:
             
             # Use the ProxmoxAPI to check if the bridges exist
             proxmox = self.proxmox_connections[node]
-            network_info = proxmox.nodes(node).network.get()
-            
-            existing_bridges = [iface.get('iface') for iface in network_info]
+            try:
+                network_info = proxmox.nodes(node).network.get()
+                existing_bridges = [iface.get('iface') for iface in network_info]
+                logger.info(f"Existing bridges detected via API: {existing_bridges}")
+            except Exception as e:
+                logger.warning(f"Failed to get network info via API: {e}")
+                # Fallback to empty list, we'll try to create the bridges anyway
+                existing_bridges = []
             
             # If bridges don't exist, create them using API
-            if internal_bridge not in existing_bridges:
-                logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
-                proxmox.nodes(node).network.post(
-                    iface=internal_bridge,
-                    type='bridge',
-                    autostart=internal_autostart,
-                    comments=internal_name
-                )
-            else:
-                logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
+            created_bridges = False
             
-            if external_bridge not in existing_bridges:
-                logger.info(f"Creating external bridge {external_bridge} on {node}...")
-                proxmox.nodes(node).network.post(
-                    iface=external_bridge,
-                    type='bridge',
-                    autostart=external_autostart,
-                    comments=external_name
-                )
+            if internal_bridge in existing_bridges:
+                logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
             else:
+                try:
+                    logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
+                    proxmox.nodes(node).network.post(
+                        iface=internal_bridge,
+                        type='bridge',
+                        autostart=internal_autostart,
+                        comments=internal_name
+                    )
+                    created_bridges = True
+                    logger.info(f"Successfully created internal bridge {internal_bridge}")
+                except Exception as e:
+                    logger.error(f"Failed to create internal bridge {internal_bridge}: {e}")
+                    # Continue with external bridge even if internal bridge creation failed
+            
+            if external_bridge in existing_bridges:
                 logger.info(f"External bridge {external_bridge} already exists on {node}")
+            else:
+                try:
+                    logger.info(f"Creating external bridge {external_bridge} on {node}...")
+                    proxmox.nodes(node).network.post(
+                        iface=external_bridge,
+                        type='bridge',
+                        autostart=external_autostart,
+                        comments=external_name
+                    )
+                    created_bridges = True
+                    logger.info(f"Successfully created external bridge {external_bridge}")
+                except Exception as e:
+                    logger.error(f"Failed to create external bridge {external_bridge}: {e}")
             
             # Skip VLAN configuration as requested
             logger.info("Skipping VLAN configuration as requested")
             
-            # Apply network configuration
-            logger.info(f"Applying network configuration on {node}...")
-            proxmox.nodes(node).network.put('reload')
+            # Apply network configuration only if we created new bridges
+            if created_bridges:
+                try:
+                    logger.info(f"Applying network configuration on {node}...")
+                    proxmox.nodes(node).network.put('reload')
+                    logger.info(f"Network configuration applied on {node}")
+                except Exception as e:
+                    logger.error(f"Failed to reload network configuration: {e}")
+                    # Continue even if reload failed
+            else:
+                logger.info(f"No new bridges created, skipping network reload")
             
             logger.info(f"Network configuration completed on {node}")
             return True
         except Exception as e:
             logger.error(f"Failed to configure networks on {node} using API: {e}")
+            return False
+
+    def _configure_networks_fallback(self, node_key):
+        """Configure networks using iproute2 commands as a fallback method."""
+        node_config = self.config['proxmox'][node_key]
+        node = node_config['node']
+        
+        try:
+            # Configure internal network
+            internal_bridge = node_config['network']['internal_bridge']
+            internal_name = self.config['networks']['internal']['name']
+            
+            # Configure external network
+            external_bridge = node_config['network']['external_bridge']
+            external_name = self.config['networks']['external']['name']
+            
+            # Check if bridges already exist
+            logger.info(f"Checking if bridges already exist on {node}...")
+            ip_output = self._run_local_command("ip link show")
+            existing_bridges = []
+            for line in ip_output.splitlines():
+                if ': ' in line:
+                    iface_name = line.split(': ')[1].split(':')[0].strip()
+                    existing_bridges.append(iface_name)
+            
+            logger.info(f"Existing bridges detected: {existing_bridges}")
+            
+            # Create internal bridge if it doesn't exist
+            if internal_bridge not in existing_bridges:
+                logger.info(f"Creating internal bridge {internal_bridge} using iproute2...")
+                self._run_local_command(f"ip link add name {internal_bridge} type bridge")
+                self._run_local_command(f"ip link set {internal_bridge} up")
+                logger.info(f"Internal bridge {internal_bridge} created successfully")
+            else:
+                logger.info(f"Internal bridge {internal_bridge} already exists")
+            
+            # Create external bridge if it doesn't exist and is not vmbr0
+            if external_bridge != "vmbr0" and external_bridge not in existing_bridges:
+                logger.info(f"Creating external bridge {external_bridge} using iproute2...")
+                self._run_local_command(f"ip link add name {external_bridge} type bridge")
+                self._run_local_command(f"ip link set {external_bridge} up")
+                logger.info(f"External bridge {external_bridge} created successfully")
+            else:
+                logger.info(f"External bridge {external_bridge} already exists or is vmbr0")
+            
+            # Skip VLAN configuration as requested
+            logger.info("Skipping VLAN configuration as requested")
+            
+            logger.info(f"Network configuration completed on {node} using fallback method")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to configure networks on {node} using fallback method: {e}")
             return False
 
     def _run_local_command(self, command):
