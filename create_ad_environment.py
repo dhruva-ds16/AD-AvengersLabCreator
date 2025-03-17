@@ -89,10 +89,10 @@ class ADEnvironmentCreator:
 
     def configure_networks(self):
         """Configure network bridges and VLANs on Proxmox nodes."""
-        # First detect default network settings if needed
-        if self.config['networks']['external'].get('use_default', False):
-            for node_key in ['node1', 'node2']:
-                self._detect_default_network(node_key)
+        # Skip default network detection as requested
+        # if self.config['networks']['external'].get('use_default', False):
+        #     for node_key in ['node1', 'node2']:
+        #         self._detect_default_network(node_key)
         
         for node_key in ['node1', 'node2']:
             node = self.config['proxmox'][node_key]['node']

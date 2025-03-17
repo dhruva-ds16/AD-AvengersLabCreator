@@ -1,23 +1,23 @@
 # Proxmox Configuration
 proxmox:
   node1:
-    host: "proxmox1.yourdomain.com"  # Replace with your actual hostname
-    node: "pve1"
+    host: "192.168.0.132"  # First Proxmox node IP
+    node: "proxmox1"
     storage: "local-lvm"
     network:
       internal_bridge: "vmbr0"
       external_bridge: "vmbr1"
       external_interface: "eth0"  # Physical interface for external network
   node2:
-    host: "proxmox2.yourdomain.com"  # Replace with your actual hostname
-    node: "pve2"
+    host: "192.168.0.135"  # Second Proxmox node IP
+    node: "proxmox2"
     storage: "local-lvm"
     network:
       internal_bridge: "vmbr0"
       external_bridge: "vmbr1"
       external_interface: "eth0"  # Physical interface for external network
   user: "root@pam"
-  token_name: "ad-creator"
+  token_name: "adtoken-lab"
   token_value: ""  # Add your API token here
   verify_ssl: false
 
@@ -34,12 +34,12 @@ networks:
   external:
     name: "Avengers External Network"
     bridge: "vmbr1"
-    subnet: "10.0.0.0/24"
-    gateway: "10.0.0.1"
+    subnet: "192.168.0.0/24"  # Updated to match your network
+    gateway: "192.168.0.1"    # Updated to match your gateway
     vlan: 20
     autostart: true
     mtu: 1500
-    use_default: true  # Use default external network settings
+    use_default: false  # Disabled default network detection
 
 # Active Directory Configuration
 active_directory:
@@ -78,8 +78,8 @@ vm_distribution:
     network:
       - type: "external"
         bridge: "vmbr1"
-        ip: "10.0.0.10"
-        gateway: "10.0.0.1"
+        ip: "192.168.0.140"  # Updated to match your network
+        gateway: "192.168.0.1"  # Updated to match your gateway
         subnet_mask: "255.255.255.0"
         vlan: 20
 
@@ -100,8 +100,8 @@ vm_distribution:
         vlan: 10
       - type: "external"
         bridge: "vmbr1"
-        ip: "10.0.0.11"
-        gateway: "10.0.0.1"
+        ip: "192.168.0.141"  # Updated to match your network
+        gateway: "192.168.0.1"  # Updated to match your gateway
         subnet_mask: "255.255.255.0"
         vlan: 20
 

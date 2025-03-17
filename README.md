@@ -176,4 +176,54 @@ The environment uses an Avengers theme:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+# Running on Proxmox Nodes
+
+If you're running this directly on one of your Proxmox nodes (192.168.0.132 or 192.168.0.135), follow these simplified steps:
+
+1. **Clone or Download the Repository**
+   ```bash
+   # Create a directory for the project
+   mkdir -p /root/avengers-ad-lab
+   cd /root/avengers-ad-lab
+   
+   # Clone from GitHub if you've pushed it there
+   git clone https://github.com/yourusername/Avengers-AD-Lab-Creator.git .
+   
+   # Or copy all files to this directory
+   ```
+
+2. **Make the Deployment Script Executable**
+   ```bash
+   chmod +x deploy.sh
+   ```
+
+3. **Verify ISOs**
+   
+   Ensure the Windows Server ISO and VirtIO drivers ISO are available in your Proxmox storage:
+   ```bash
+   ls -la /var/lib/vz/template/iso/
+   ```
+   
+   The script expects:
+   - `/var/lib/vz/template/iso/Windows_Server_2022_EVAL.iso`
+   - `/var/lib/vz/template/iso/virtio-win.iso`
+
+4. **Run the Deployment Script**
+   ```bash
+   ./deploy.sh
+   ```
+
+5. **Monitor the Deployment**
+   
+   The script will:
+   - Install required dependencies
+   - Configure network bridges and VLANs
+   - Create the VMs with the specified configurations
+   - Log the progress to the console
+
+This deployment is configured specifically for your environment with:
+- Proxmox Node 1: 192.168.0.132
+- Proxmox Node 2: 192.168.0.135
+- Gateway: 192.168.0.1 
