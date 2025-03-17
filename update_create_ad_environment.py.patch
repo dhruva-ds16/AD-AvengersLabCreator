@@ -1,0 +1,56 @@
+--- create_ad_environment.py.orig
++++ create_ad_environment.py
+@@ -637,6 +637,27 @@
+         # Upload Active Directory configuration files
+         self._upload_ad_configuration_files(vm_id, vm_config)
+ 
++        # Store VM ID for networking automation
++        self._store_vm_id(vm_name, vm_id)
++
++    def _store_vm_id(self, vm_name, vm_id):
++        """Store VM ID in the extended config file for networking automation."""
++        try:
++            extend_config_path = 'extend_config.yaml'
++            if os.path.exists(extend_config_path):
++                with open(extend_config_path, 'r') as f:
++                    extend_config = yaml.safe_load(f)
++            else:
++                extend_config = {'vm_ids': {}}
++                
++            if 'vm_ids' not in extend_config:
++                extend_config['vm_ids'] = {}
++                
++            extend_config['vm_ids'][vm_name] = vm_id
++            
++            with open(extend_config_path, 'w') as f:
++                yaml.dump(extend_config, f, default_flow_style=False)
++        except Exception as e:
++            logger.error(f"Failed to store VM ID: {e}")
++
+     def run(self):
+         """Run the environment creation process."""
+         try:
+@@ -649,6 +670,17 @@
+             # Create VMs according to the configuration
+             self._setup_vms()
+             
++            # Add domain admin password to extend_config for later use
++            try:
++                extend_config_path = 'extend_config.yaml'
++                with open(extend_config_path, 'r') as f:
++                    extend_config = yaml.safe_load(f)
++                
++                extend_config['vm_credentials']['password'] = self.config['active_directory']['domain_admin_password']
++                
++                with open(extend_config_path, 'w') as f:
++                    yaml.dump(extend_config, f, default_flow_style=False)
++            except Exception as e:
++                logger.error(f"Failed to store credentials: {e}")
++            
+             logger.info("Environment creation completed successfully!")
+-        except Exception as e:
+-            logger.error(f"Environment creation failed: {e}")
++            return 0
++        except Exception as e:
++            logger.error(f"Environment creation failed: {e}")
++            return 1 
