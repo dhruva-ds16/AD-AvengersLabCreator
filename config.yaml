@@ -1,0 +1,173 @@
+# Proxmox Configuration
+proxmox:
+  node1:
+    host: "proxmox1.yourdomain.com"  # Replace with your actual hostname
+    node: "pve1"
+    storage: "local-lvm"
+    network:
+      internal_bridge: "vmbr0"
+      external_bridge: "vmbr1"
+      external_interface: "eth0"  # Physical interface for external network
+  node2:
+    host: "proxmox2.yourdomain.com"  # Replace with your actual hostname
+    node: "pve2"
+    storage: "local-lvm"
+    network:
+      internal_bridge: "vmbr0"
+      external_bridge: "vmbr1"
+      external_interface: "eth0"  # Physical interface for external network
+  user: "root@pam"
+  token_name: "ad-creator"
+  token_value: ""  # Add your API token here
+  verify_ssl: false
+
+# Network Configuration
+networks:
+  internal:
+    name: "Avengers Internal Network"
+    bridge: "vmbr0"
+    subnet: "192.168.1.0/24"
+    gateway: "192.168.1.1"
+    vlan: 10
+    autostart: true
+    mtu: 1500
+  external:
+    name: "Avengers External Network"
+    bridge: "vmbr1"
+    subnet: "10.0.0.0/24"
+    gateway: "10.0.0.1"
+    vlan: 20
+    autostart: true
+    mtu: 1500
+    use_default: true  # Use default external network settings
+
+# Active Directory Configuration
+active_directory:
+  domain: "avengers.local"
+  netbios_name: "AVENGERS"
+  domain_admin: "nick.fury"
+  domain_admin_password: "tqwi$*1pd8AQTw"  # Set a secure password
+  safe_mode_password: "uW27wFG@9^pYRA"     # Set a secure password
+
+# VM Distribution Configuration
+vm_distribution:
+  domain_controller:
+    name: "SHIELD-HQ"
+    node: "pve1"  # Primary node
+    memory: 4096
+    cores: 2
+    storage: "local-lvm"
+    disk_size: "60G"
+    template: ""  # Optional: VM template to clone from
+    network:
+      - type: "internal"
+        bridge: "vmbr0"
+        ip: "192.168.1.10"
+        gateway: "192.168.1.1"
+        subnet_mask: "255.255.255.0"
+        vlan: 10
+
+  vm1:  # External-facing VM
+    name: "STARK-TOWER"
+    node: "pve2"  # Secondary node for load distribution
+    memory: 4096
+    cores: 2
+    storage: "local-lvm"
+    disk_size: "50G"
+    template: ""  # Optional: VM template to clone from
+    network:
+      - type: "external"
+        bridge: "vmbr1"
+        ip: "10.0.0.10"
+        gateway: "10.0.0.1"
+        subnet_mask: "255.255.255.0"
+        vlan: 20
+
+  vm2:  # Dual-NIC VM
+    name: "SANCTUM"
+    node: "pve1"  # Primary node with DC for better internal communication
+    memory: 4096
+    cores: 2
+    storage: "local-lvm"
+    disk_size: "50G"
+    template: ""  # Optional: VM template to clone from
+    network:
+      - type: "internal"
+        bridge: "vmbr0"
+        ip: "192.168.1.11"
+        gateway: "192.168.1.1"
+        subnet_mask: "255.255.255.0"
+        vlan: 10
+      - type: "external"
+        bridge: "vmbr1"
+        ip: "10.0.0.11"
+        gateway: "10.0.0.1"
+        subnet_mask: "255.255.255.0"
+        vlan: 20
+
+# Windows ISO and Template Configuration
+windows:
+  iso_storage: "local"
+  iso_file: "Windows_Server_2022_EVAL.iso"
+  virtio_iso: "virtio-win.iso"
+
+# User Configuration
+users:
+  - username: "tony.stark"
+    fullname: "Tony Stark"
+    password: "Ir0nM@n2023!#"  # Set a secure password
+    groups: ["Avengers", "Administrators"]
+    
+  - username: "steve.rogers"
+    fullname: "Steve Rogers"
+    password: "C@pt@in4m3r1ca!"  # Set a secure password
+    groups: ["Avengers"]
+    
+  - username: "bruce.banner"
+    fullname: "Bruce Banner"
+    password: "Hulk$m@sh2023!"  # Set a secure password
+    groups: ["Avengers", "Scientists"]
+    
+  - username: "natasha.romanoff"
+    fullname: "Natasha Romanoff"
+    password: "Bl@ckW1d0w$py!"
+    groups: ["Avengers", "SHIELD-Agents"]
+    
+  - username: "thor.odinson"
+    fullname: "Thor Odinson"
+    password: "Mj0ln1r!Asg@rd"
+    groups: ["Avengers"]
+    
+  - username: "clint.barton"
+    fullname: "Clint Barton"
+    password: "H@wk3y3Arch3r!"
+    groups: ["Avengers", "SHIELD-Agents"]
+    
+  - username: "maria.hill"
+    fullname: "Maria Hill"
+    password: "SHIELD@g3nt#2023"
+    groups: ["SHIELD-Agents"]
+    
+  - username: "jane.foster"
+    fullname: "Jane Foster"
+    password: "A$tr0phys1cs!"
+    groups: ["Scientists", "Civilians"]
+    
+  - username: "pepper.potts"
+    fullname: "Pepper Potts"
+    password: "St@rkIndu$tr13s!"
+    groups: ["Civilians", "Administrators"]
+
+# Group Configuration
+groups:
+  - name: "Avengers"
+    description: "Earth's Mightiest Heroes"
+    
+  - name: "SHIELD-Agents"
+    description: "Strategic Homeland Intervention, Enforcement and Logistics Division"
+    
+  - name: "Scientists"
+    description: "Research and Development Team"
+    
+  - name: "Civilians"
+    description: "Regular users with limited access" 
