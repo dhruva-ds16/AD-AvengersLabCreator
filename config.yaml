@@ -5,16 +5,16 @@ proxmox:
     node: "proxmox1"
     storage: "local-lvm"
     network:
-      internal_bridge: "vmbr0"
-      external_bridge: "vmbr1"
+      internal_bridge: "vmbr1"  # Changed to vmbr1 for internal network
+      external_bridge: "vmbr0"  # Using existing vmbr0 for external network
       external_interface: "eth0"  # Physical interface for external network
   node2:
     host: "192.168.0.135"  # Second Proxmox node IP
     node: "proxmox2"
     storage: "local-lvm"
     network:
-      internal_bridge: "vmbr0"
-      external_bridge: "vmbr1"
+      internal_bridge: "vmbr1"  # Changed to vmbr1 for internal network
+      external_bridge: "vmbr0"  # Using existing vmbr0 for external network
       external_interface: "eth0"  # Physical interface for external network
   user: "root@pam"
   token_name: "adtoken-lab"
@@ -25,18 +25,16 @@ proxmox:
 networks:
   internal:
     name: "Avengers Internal Network"
-    bridge: "vmbr0"
+    bridge: "vmbr1"  # Changed to match internal_bridge above
     subnet: "192.168.1.0/24"
     gateway: "192.168.1.1"
-    vlan: 10
     autostart: true
     mtu: 1500
   external:
     name: "Avengers External Network"
-    bridge: "vmbr1"
+    bridge: "vmbr0"  # Changed to match external_bridge above
     subnet: "192.168.0.0/24"  # Updated to match your network
     gateway: "192.168.0.1"    # Updated to match your gateway
-    vlan: 20
     autostart: true
     mtu: 1500
     use_default: false  # Disabled default network detection
@@ -61,11 +59,10 @@ vm_distribution:
     template: ""  # Optional: VM template to clone from
     network:
       - type: "internal"
-        bridge: "vmbr0"
+        bridge: "vmbr1"  # Changed to match internal_bridge
         ip: "192.168.1.10"
         gateway: "192.168.1.1"
         subnet_mask: "255.255.255.0"
-        vlan: 10
 
   vm1:  # External-facing VM
     name: "STARK-TOWER"
@@ -77,11 +74,10 @@ vm_distribution:
     template: ""  # Optional: VM template to clone from
     network:
       - type: "external"
-        bridge: "vmbr1"
+        bridge: "vmbr0"  # Changed to match external_bridge
         ip: "192.168.0.140"  # Updated to match your network
         gateway: "192.168.0.1"  # Updated to match your gateway
         subnet_mask: "255.255.255.0"
-        vlan: 20
 
   vm2:  # Dual-NIC VM
     name: "SANCTUM"
@@ -93,17 +89,15 @@ vm_distribution:
     template: ""  # Optional: VM template to clone from
     network:
       - type: "internal"
-        bridge: "vmbr0"
+        bridge: "vmbr1"  # Changed to match internal_bridge
         ip: "192.168.1.11"
         gateway: "192.168.1.1"
         subnet_mask: "255.255.255.0"
-        vlan: 10
       - type: "external"
-        bridge: "vmbr1"
+        bridge: "vmbr0"  # Changed to match external_bridge
         ip: "192.168.0.141"  # Updated to match your network
         gateway: "192.168.0.1"  # Updated to match your gateway
         subnet_mask: "255.255.255.0"
-        vlan: 20
 
 # Windows ISO and Template Configuration
 windows:

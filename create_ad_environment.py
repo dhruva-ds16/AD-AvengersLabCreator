@@ -158,36 +158,54 @@ class ADEnvironmentCreator:
             
             # Check if bridges already exist using pvesh
             logger.info(f"Checking if bridges already exist on {node}...")
-            network_info_str = self._run_local_command(f"pvesh get /nodes/{node}/network")
-            
-            # Parse the network info to find existing bridges
-            existing_bridges = []
-            for line in network_info_str.splitlines():
-                if 'iface:' in line:
-                    iface_name = line.split('iface:')[1].strip()
-                    existing_bridges.append(iface_name)
-            
-            logger.info(f"Existing bridges: {existing_bridges}")
+            try:
+                network_info_str = self._run_local_command(f"pvesh get /nodes/{node}/network")
+                
+                # Parse the network info to find existing bridges
+                existing_bridges = []
+                for line in network_info_str.splitlines():
+                    if 'iface:' in line:
+                        iface_name = line.split('iface:')[1].strip()
+                        existing_bridges.append(iface_name)
+                
+                logger.info(f"Existing bridges detected via pvesh: {existing_bridges}")
+            except Exception as e:
+                logger.warning(f"Failed to get network info via pvesh: {e}")
+                # Fallback to ip command
+                ip_output = self._run_local_command("ip link show")
+                existing_bridges = []
+                for line in ip_output.splitlines():
+                    if ': ' in line and 'bridge' in line:
+                        iface_name = line.split(': ')[1].split(':')[0].strip()
+                        existing_bridges.append(iface_name)
+                logger.info(f"Existing bridges detected via ip command: {existing_bridges}")
             
             # If bridges don't exist, create them using pvesh
-            if internal_bridge not in existing_bridges:
+            if internal_bridge in existing_bridges:
+                logger.info(f"Internal bridge {internal_bridge} already exists on {node}, skipping creation")
+            else:
                 logger.info(f"Creating internal bridge {internal_bridge} on {node}...")
                 self._run_local_command(f"pvesh create /nodes/{node}/network --iface {internal_bridge} --type bridge --autostart {internal_autostart} --comments '{internal_name}'")
-            else:
-                logger.info(f"Internal bridge {internal_bridge} already exists on {node}")
             
-            if external_bridge not in existing_bridges:
+            if external_bridge in existing_bridges:
+                logger.info(f"External bridge {external_bridge} already exists on {node}, skipping creation")
+                # If internal and external bridges are the same (both vmbr0), log a warning
+                if internal_bridge == external_bridge:
+                    logger.warning(f"Internal and external bridges are both set to {internal_bridge}. This is not recommended for production.")
+            else:
                 logger.info(f"Creating external bridge {external_bridge} on {node}...")
                 self._run_local_command(f"pvesh create /nodes/{node}/network --iface {external_bridge} --type bridge --autostart {external_autostart} --comments '{external_name}'")
-            else:
-                logger.info(f"External bridge {external_bridge} already exists on {node}")
             
             # Skip VLAN configuration as requested
             logger.info("Skipping VLAN configuration as requested")
             
-            # Apply network configuration using pvesh
-            logger.info(f"Applying network configuration on {node}...")
-            self._run_local_command(f"pvesh create /nodes/{node}/network --reload 1")
+            # Apply network configuration using pvesh only if we created new bridges
+            if internal_bridge not in existing_bridges or external_bridge not in existing_bridges:
+                logger.info(f"Applying network configuration on {node}...")
+                self._run_local_command(f"pvesh create /nodes/{node}/network --reload 1")
+                logger.info(f"Network configuration applied on {node}")
+            else:
+                logger.info(f"No new bridges created, skipping network reload")
             
             logger.info(f"Network configuration completed on {node}")
             return True
