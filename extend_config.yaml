@@ -1,0 +1,31 @@
+# VM IDs Configuration Extension
+# This file should be populated automatically during VM creation
+
+# VM IDs for networking automation
+vm_ids:
+  SHIELD-HQ: ~  # Will be populated by the create_ad_environment.py script
+  STARK-TOWER: ~
+  SANCTUM: ~
+
+# Network interface names for each VM
+# These may be different depending on VM configuration
+network_interfaces:
+  SHIELD-HQ:
+    internal: "Ethernet"
+  STARK-TOWER:
+    external: "Ethernet"
+  SANCTUM:
+    internal: "Ethernet"
+    external: "Ethernet 2"
+
+# Windows credentials for VM access
+# These should match the VM credentials set in config.yaml
+vm_credentials:
+  username: "Administrator"
+  password: ~  # Leave empty - will be extracted from the main config
+
+# VM setup status
+setup_completed:
+  network_configuration: false
+  domain_configuration: false
+  user_creation: false 
