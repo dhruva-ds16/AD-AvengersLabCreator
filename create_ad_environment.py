@@ -488,6 +488,18 @@ iface {external_bridge} inet manual
             logger.info(f"Using Windows ISO: {iso_path}")
             logger.info(f"Using VirtIO ISO: {virtio_path}")
             
+            # Fix disk size format - Proxmox expects size=60G, not 60G
+            storage = vm_config['storage']
+            disk_size = vm_config['disk_size']
+            
+            # Format the disk specification correctly
+            # Remove the size unit if it's in the disk_size and add it back in the correct format
+            disk_size_clean = disk_size.rstrip("GMK")
+            disk_unit = disk_size[-1] if disk_size[-1] in "GMK" else "G"
+            disk_spec = f"{storage}:size={disk_size_clean}{disk_unit}"
+            
+            logger.info(f"Using disk specification: {disk_spec}")
+            
             # Convert any boolean parameters to integers for Proxmox API
             create_params = {
                 'vmid': vmid,
@@ -497,7 +509,7 @@ iface {external_bridge} inet manual
                 'sockets': 1,
                 'ostype': "win11",
                 'scsihw': "virtio-scsi-pci",
-                'scsi0': f"{vm_config['storage']}:{vm_config['disk_size']}",
+                'scsi0': disk_spec,
                 'ide2': f"{iso_path},media=cdrom",
                 'ide3': f"{virtio_path},media=cdrom",
                 **net_config
